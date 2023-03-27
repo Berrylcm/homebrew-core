@@ -108,55 +108,12 @@ jobs:
         with:
           signing_key: ${{ secrets.BREWTESTBOT_GPG_SIGNING_SUBKEY }}
 
-      - name: Checkout PR branch if needed
-        id: pr-branch
+      - name: Checkout PR branch
+        run: gh pr checkout ${{github.event.inputs.pull_request}}
+        if: inputs.commit_bottles_to_pr_branch
         env:
           GH_TOKEN: ${{secrets.GITHUB_TOKEN}}
         working-directory: ${{steps.set-up-homebrew.outputs.repository-path}}
-        run: |
-          if ! ${{inputs.commit_bottles_to_pr_branch}}
-          then
-            echo "remote=origin" >> "$GITHUB_OUTPUT"
-            echo "branch=master" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # We can't do `gh pr checkout` because of cli/cli#2702.
-          pr="${{inputs.pull_request}}"
-
-          remote="$(
-            gh api \
-              --header "Accept: application/vnd.github+json" \
-              --header "X-GitHub-Api-Version: 2022-11-28" \
-              "/repos/$GH_REPO/pulls/$pr" \
-              --jq '.head.repo.html_url'
-          )"
-
-          if [ -z "$remote" ]
-          then
-            echo "::error ::Failed to get pull request remote!"
-            exit 1
-          fi
-          echo "remote=$remote" >> "$GITHUB_OUTPUT"
-
-          branch="$(
-            gh api \
-              --header "Accept: application/vnd.github+json" \
-              --header "X-GitHub-Api-Version: 2022-11-28" \
-              "/repos/$GH_REPO/pulls/$pr" \
-              --jq '.head.ref'
-          )"
-
-          if [ -z "$branch" ]
-          then
-            echo "::error ::Failed to get pull request branch!"
-            exit 1
-          fi
-          echo "branch=$branch" >> "$GITHUB_OUTPUT"
-
-          git fetch origin "pull/$pr/head:$branch"
-          git checkout "$branch"
-          git config --local "branch.$branch.pushRemote" "$remote"
 
       - name: Pull and upload bottles to GitHub Packages
         env:
@@ -177,14 +134,40 @@ jobs:
             ${{github.event.inputs.args}} \
             ${{github.event.inputs.pull_request}}
 
+      - name: Get current branch and remote
+        id: branch-and-remote-info
+        working-directory: ${{steps.set-up-homebrew.outputs.repository-path}}
+        run: |
+          echo "HEAD=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          branch="$(git branch --show-current)"
+          if [ -n "$branch" ]
+          then
+            echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error ::Not on a branch!"
+            exit 1
+          fi
+
+          if push_remote="$(git config --local "branch.$branch.pushRemote")"
+          then
+            echo "remote=$push_remote" >> "$GITHUB_OUTPUT"
+          elif remote="$(git config --local "branch.$branch.remote")"
+          then
+            echo "remote=$remote" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error ::Could not find branch remote!"
+            exit 1
+          fi
+
       - name: Push commits
         uses: Homebrew/actions/git-try-push@master
         with:
           token: ${{secrets.HOMEBREW_GITHUB_PUBLIC_REPO_TOKEN}}
           directory: ${{steps.set-up-homebrew.outputs.repository-path}}
-          remote: ${{steps.pr-branch.outputs.remote}}
-          branch: ${{steps.pr-branch.outputs.branch}}
+          remote: ${{steps.branch-and-remote-info.outputs.remote}}
+          branch: ${{steps.branch-and-remote-info.outputs.branch}}
           force: ${{inputs.commit_bottles_to_pr_branch && inputs.autosquash && !inputs.clean}}
+          no_lease: ${{inputs.commit_bottles_to_pr_branch && inputs.autosquash && !inputs.clean}}
         env:
           GIT_COMMITTER_NAME: ${{ steps.git-user-config.outputs.name }}
           GIT_COMMITTER_EMAIL: ${{ steps.git-user-config.outputs.email }}
