@@ -124,13 +124,6 @@ jobs:
             ${{github.event.inputs.args}} \
             ${{github.event.inputs.pull_request}}
 
-      - name: Add CI-published-bottle-commits label
-        run: gh pr edit --add-label CI-published-bottle-commits ${{github.event.inputs.pull_request}}
-        if: inputs.commit_bottles_to_pr_branch
-        env:
-          GH_TOKEN: ${{secrets.GITHUB_TOKEN}}
-        working-directory: ${{steps.set-up-homebrew.outputs.repository-path}}
-
       - name: Get current branch and remote
         id: branch-and-remote-info
         working-directory: ${{steps.set-up-homebrew.outputs.repository-path}}
@@ -185,6 +178,13 @@ jobs:
           token: ${{secrets.HOMEBREW_GITHUB_PUBLIC_REPO_TOKEN}}
           pr: ${{github.event.inputs.pull_request}}
           message: "bottle publish failed"
+
+      - name: Add CI-published-bottle-commits label
+        run: gh pr edit --add-label CI-published-bottle-commits ${{github.event.inputs.pull_request}}
+        if: inputs.commit_bottles_to_pr_branch
+        env:
+          GH_TOKEN: ${{secrets.GITHUB_TOKEN}}
+        working-directory: ${{steps.set-up-homebrew.outputs.repository-path}}
 
       - name: Wait until pull request branch is in sync with local repository
         if: inputs.commit_bottles_to_pr_branch
