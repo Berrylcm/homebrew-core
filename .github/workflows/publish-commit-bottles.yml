@@ -138,7 +138,6 @@ jobs:
         id: branch-and-remote-info
         working-directory: ${{steps.set-up-homebrew.outputs.repository-path}}
         run: |
-          echo "HEAD=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           branch="$(git branch --show-current)"
           if [ -n "$branch" ]
           then
@@ -202,7 +201,7 @@ jobs:
         if: inputs.commit_bottles_to_pr_branch
         working-directory: ${{steps.set-up-homebrew.outputs.repository-path}}
         run: |
-          local_head="${{steps.branch-and-remote-info.outputs.HEAD}}"
+          local_head="$(git rev-parse HEAD)"
           echo "::notice ::Local repository HEAD: $local_head"
 
           attempt=0
