@@ -13,11 +13,6 @@ on:
         type: boolean
         required: false
         default: false
-      commit_bottles_to_pr_branch:
-        description: "Push bottle commits to the pull request branch? (default: false)"
-        type: boolean
-        required: false
-        default: false
       autosquash:
         description: "Squash pull request commits according to Homebrew style? (default: false)"
         type: boolean
@@ -52,18 +47,7 @@ jobs:
     permissions:
       pull-requests: write
     steps:
-      - name: Post comment once started (legacy)
-        if: ${{!inputs.commit_bottles_to_pr_branch}}
-        uses: Homebrew/actions/post-comment@master
-        with:
-          token: ${{secrets.GITHUB_TOKEN}}
-          issue: ${{github.event.inputs.pull_request}}
-          body: ":shipit: @${{github.actor}} has [triggered a merge](${{github.event.repository.html_url}}/actions/runs/${{github.run_id}})."
-          bot_body: ":robot: A scheduled task has [triggered a merge](${{github.event.repository.html_url}}/actions/runs/${{github.run_id}})."
-          bot: BrewTestBot
-
       - name: Post comment once started
-        if: inputs.commit_bottles_to_pr_branch
         uses: Homebrew/actions/post-comment@master
         with:
           token: ${{secrets.GITHUB_TOKEN}}
@@ -78,16 +62,6 @@ jobs:
         with:
           test-bot: false
 
-      - name: Cache gems
-        uses: actions/cache@v3
-        with:
-          path: ${{steps.set-up-homebrew.outputs.gems-path}}
-          key: ${{runner.os}}-rubygems-v2-${{steps.set-up-homebrew.outputs.gems-hash}}
-          restore-keys: ${{runner.os}}-rubygems-v2-
-
-      - name: Install gems
-        run: brew install-bundler-gems
-
       - name: Configure Git user
         id: git-user-config
         uses: Homebrew/actions/git-user-config@master
@@ -101,7 +75,6 @@ jobs:
 
       - name: Checkout PR branch
         run: gh pr checkout '${{github.event.inputs.pull_request}}'
-        if: inputs.commit_bottles_to_pr_branch
         env:
           GH_TOKEN: ${{secrets.GITHUB_TOKEN}}
         working-directory: ${{steps.set-up-homebrew.outputs.repository-path}}
@@ -117,11 +90,11 @@ jobs:
           # Don't quote arguments that might be empty; this causes errors.
           brew pr-pull \
             --debug \
+            --no-cherry-pick \
             --workflows=tests.yml \
             --committer="$BREWTESTBOT_NAME_EMAIL" \
             --root-url="https://ghcr.io/v2/homebrew/core" \
             '${{inputs.autosquash && '--autosquash' || '--clean'}}' \
-            ${{inputs.commit_bottles_to_pr_branch && '--no-cherry-pick' || ''}} \
             ${{inputs.warn_on_upload_failure && '--warn-on-upload-failure' || ''}} \
             ${{inputs.message && format('--message="{0}"', inputs.message) || ''}} \
             '${{github.event.inputs.pull_request}}'
@@ -150,9 +123,6 @@ jobs:
             exit 1
           fi
 
-          force_without_lease='${{inputs.commit_bottles_to_pr_branch && inputs.autosquash}}'
-          echo "force_without_lease=$force_without_lease" >> "$GITHUB_OUTPUT"
-
       - name: Push commits
         uses: Homebrew/actions/git-try-push@master
         with:
@@ -160,8 +130,8 @@ jobs:
           directory: ${{steps.set-up-homebrew.outputs.repository-path}}
           remote: ${{steps.push-configuration.outputs.remote}}
           branch: ${{steps.push-configuration.outputs.branch}}
-          force: ${{steps.push-configuration.outputs.force_without_lease}}
-          no_lease: ${{steps.push-configuration.outputs.force_without_lease}}
+          force: ${{inputs.autosquash}}
+          no_lease: ${{inputs.autosquash}}
         env:
           GIT_COMMITTER_NAME: ${{ steps.git-user-config.outputs.name }}
           GIT_COMMITTER_EMAIL: ${{ steps.git-user-config.outputs.email }}
@@ -187,13 +157,11 @@ jobs:
 
       - name: Add CI-published-bottle-commits label
         run: gh pr edit --add-label CI-published-bottle-commits '${{github.event.inputs.pull_request}}'
-        if: inputs.commit_bottles_to_pr_branch
         env:
           GH_TOKEN: ${{secrets.GITHUB_TOKEN}}
         working-directory: ${{steps.set-up-homebrew.outputs.repository-path}}
 
       - name: Wait until pull request branch is in sync with local repository
-        if: inputs.commit_bottles_to_pr_branch
         working-directory: ${{steps.set-up-homebrew.outputs.repository-path}}
         run: |
           local_head="$(git rev-parse HEAD)"
@@ -206,7 +174,7 @@ jobs:
           # Wait (with exponential backoff) until the PR branch is in sync
           while [ "$attempt" -lt "$max_attempts" ]
           do
-            remote_head="$(git ls-remote origin pull/${{inputs.pull_request}}/head | cut -f1)"
+            remote_head="$(git ls-remote origin "pull/${{inputs.pull_request}}/head" | cut -f1)"
             echo "::notice ::Pull request HEAD: $remote_head"
             if [ "$local_head" = "$remote_head" ]
             then
@@ -220,26 +188,25 @@ jobs:
           done
 
           # One last check...
-          if [ -z "$success" ] && [ "$local_head" != "$(git ls-remote origin pull/${{inputs.pull_request}}/head | cut -f1)" ]
+          if [ -z "$success" ] && [ "$local_head" != "$(git ls-remote origin "pull/${{inputs.pull_request}}/head" | cut -f1)" ]
           then
             echo "::error ::No attempts remaining. Giving up."
             exit 1
           fi
 
-      # TODO: uncomment this once automerge is enabled again.
-      # - name: Enable PR automerge
-      #   if: inputs.commit_bottles_to_pr_branch
-      #   env:
-      #     GH_TOKEN: ${{secrets.HOMEBREW_GITHUB_PUBLIC_REPO_TOKEN}}
-      #   working-directory: ${{steps.set-up-homebrew.outputs.repository-path}}
-      #   run: gh pr merge --auto --merge '${{inputs.pull_request}}'
+      - name: Enable PR automerge
+        id: automerge
+        env:
+          GH_TOKEN: ${{secrets.HOMEBREW_GITHUB_PUBLIC_REPO_TOKEN}}
+        working-directory: ${{steps.set-up-homebrew.outputs.repository-path}}
+        run: gh pr merge --auto --merge '${{inputs.pull_request}}'
 
       - name: Post comment on failure
-        if: ${{failure() && inputs.commit_bottles_to_pr_branch}}
+        if: ${{failure() && steps.automerge.conclusion == 'failure'}}
         uses: Homebrew/actions/post-comment@master
         with:
           token: ${{secrets.GITHUB_TOKEN}}
           issue: ${{github.event.inputs.pull_request}}
-          body: ":warning: @${{github.actor}} [Failed to enable automerge.](${{github.event.repository.html_url}}/actions/runs/${{github.run_id}})"
-          bot_body: ":warning: [Failed to enable automerge.](${{github.event.repository.html_url}}/actions/runs/${{github.run_id}})"
+          body: ":warning: @${{github.actor}} [Failed to enable automerge](${{github.event.repository.html_url}}/actions/runs/${{github.run_id}})."
+          bot_body: ":warning: [Failed to enable automerge](${{github.event.repository.html_url}}/actions/runs/${{github.run_id}})."
           bot: BrewTestBot

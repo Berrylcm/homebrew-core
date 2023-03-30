@@ -296,21 +296,6 @@ jobs:
           step_name: "`brew bottle` output on ${{ matrix.runner }}"
           collapse: "true"
 
-      - name: Run brew test-bot ${{ needs.setup_tests.outputs.test-bot-dependents-args }} --skipped-or-failed-formulae=${{ steps.brew-test-bot-formulae.outputs.skipped_or_failed_formulae }}
-        if: ${{(success() || failure()) && fromJson(needs.setup_tests.outputs.test-dependents)}}
-        run: |
-          cd bottles
-          brew test-bot ${{ needs.setup_tests.outputs.test-bot-dependents-args }} --skipped-or-failed-formulae=${{ steps.brew-test-bot-formulae.outputs.skipped_or_failed_formulae }}
-
-      - name: Failures summary for brew test-bot ${{ needs.setup_tests.outputs.test-bot-dependents-args }} --skipped-or-failed-formulae=${{ steps.brew-test-bot-formulae.outputs.skipped_or_failed_formulae }}
-        if: ${{always() && fromJson(needs.setup_tests.outputs.test-dependents) == true}}
-        uses: Homebrew/actions/failures-summary-and-bottle-result@master
-        with:
-          workdir: ${{matrix.workdir || github.workspace}}
-          result_path: bottles/steps_output.txt
-          step_name: "Dependent summary on ${{ matrix.runner }}"
-          collapse: "true"
-
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@main
@@ -361,3 +346,90 @@ jobs:
         run: |
           brew test-bot --only-cleanup-after
           rm -rvf bottles
+
+  test_deps:
+    needs: [setup_tests, tests]
+    if: ${{github.event_name == 'pull_request' && fromJson(needs.setup_tests.outputs.syntax-only) == false && fromJson(needs.setup_tests.outputs.test-dependents) && fromJson(needs.tap_syntax.outputs.testing_formulae)}}
+    strategy:
+      matrix:
+        include:
+          - runner: "13-arm64-${{github.run_id}}-${{github.run_attempt}}-deps"
+          - runner: "13-${{github.run_id}}-${{github.run_attempt}}-deps"
+          - runner: "12-arm64-${{github.run_id}}-${{github.run_attempt}}-deps"
+          - runner: "12-${{github.run_id}}-${{github.run_attempt}}-deps"
+          - runner: "11-arm64"
+          - runner: "11-${{github.run_id}}-${{github.run_attempt}}-deps"
+          - runner: ${{needs.setup_tests.outputs.linux-runner}}
+            container:
+              image: ghcr.io/homebrew/ubuntu22.04:master
+              options: --user=linuxbrew -e GITHUB_ACTIONS_HOMEBREW_SELF_HOSTED
+            workdir: /github/home
+            timeout: 4320
+      fail-fast: ${{fromJson(needs.setup_tests.outputs.fail-fast)}}
+    runs-on: ${{matrix.runner}}
+    container: ${{matrix.container}}
+    timeout-minutes: ${{ matrix.timeout || fromJson(needs.setup_tests.outputs.timeout-minutes) }}
+    defaults:
+      run:
+        shell: /bin/bash -e {0}
+        working-directory: ${{matrix.workdir || github.workspace}}
+    env:
+      GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
+      HOMEBREW_GITHUB_API_TOKEN: ${{secrets.GITHUB_TOKEN}}
+    steps:
+      - name: Set environment variables
+        if: runner.os == 'macOS'
+        run: |
+          echo 'PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin' >> $GITHUB_ENV
+
+      - name: Set up Homebrew
+        id: set-up-homebrew
+        uses: Homebrew/actions/setup-homebrew@master
+
+      - name: Enable debug mode
+        run: |
+          echo 'HOMEBREW_DEBUG=1' >> "${GITHUB_ENV}"
+          echo 'HOMEBREW_VERBOSE=1' >> "${GITHUB_ENV}"
+        if: runner.debug
+
+      - run: brew test-bot --only-cleanup-before
+
+      - name: Download bottles from GitHub Actions
+        uses: actions/download-artifact@v3
+        with:
+          name: bottles
+          path: ~/bottles/
+
+      - name: Run brew test-bot ${{ needs.setup_tests.outputs.test-bot-dependents-args }} --skipped-or-failed-formulae=${{ steps.brew-test-bot-formulae.outputs.skipped_or_failed_formulae }}
+        if: ${{(success() || failure()) && fromJson(needs.setup_tests.outputs.test-dependents)}}
+        run: |
+          cd ~/bottles
+          brew test-bot ${{ needs.setup_tests.outputs.test-bot-dependents-args }} --skipped-or-failed-formulae=${{ steps.brew-test-bot-formulae.outputs.skipped_or_failed_formulae }}
+
+      - name: Failures summary for brew test-bot ${{ needs.setup_tests.outputs.test-bot-dependents-args }} --skipped-or-failed-formulae=${{ steps.brew-test-bot-formulae.outputs.skipped_or_failed_formulae }}
+        if: ${{always() && fromJson(needs.setup_tests.outputs.test-dependents) == true}}
+        uses: Homebrew/actions/failures-summary-and-bottle-result@master
+        with:
+          workdir: ${{matrix.workdir || github.workspace}}
+          result_path: ~/bottles/steps_output.txt
+          step_name: "Dependent summary on ${{ matrix.runner }}"
+          collapse: "true"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@main
+        with:
+          name: logs-deps-${{ matrix.runner }}
+          path: ~/bottles/logs
+
+      - name: Delete logs and home
+        if: always()
+        run: |
+          rm -rvf ~/bottles/logs
+          rm -rvf ~/bottles/home
+
+      - name: Post cleanup
+        if: always()
+        run: |
+          brew test-bot --only-cleanup-after
+          rm -rvf ~/bottles
